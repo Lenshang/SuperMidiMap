@@ -1,0 +1,29 @@
+# 构建
+build/
+dist/
+*.zip
+
+# Qt / CMake
+CMakeLists.txt.user*
+CMakeUserPresets.json
+*.autosave
+.qtc_clangd/
+.qtc_package/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.swp
+*~
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+
+# 本地日志
+aqtinstall.log

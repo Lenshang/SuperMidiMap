@@ -1,0 +1,96 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ "v*" ]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  QT_VERSION: "6.10.3"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows x64 (MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build/SuperMidiMap.exe dist/
+          Copy-Item build/midi-probe.exe dist/
+          windeployqt --no-compiler-runtime dist/SuperMidiMap.exe
+          Compress-Archive -Path dist/* -DestinationPath SuperMidiMap-windows-x64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SuperMidiMap-windows-x64
+          path: SuperMidiMap-windows-x64.zip
+
+      - name: Release (tag only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SuperMidiMap-windows-x64.zip
+
+  macos:
+    name: macOS (CoreMIDI, experimental)
+    runs-on: macos-14
+    # macOS 后端为首次移植，CI 上首次编译如有错误不影响 Windows 发布；
+    # 修复后移除此行即可。
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Package
+        run: |
+          macdeployqt build/SuperMidiMap.app -verbose=1
+          cd build
+          zip -qry ../SuperMidiMap-macos.zip SuperMidiMap.app
+
+      - name: Upload artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SuperMidiMap-macos
+          path: SuperMidiMap-macos.zip
+
+      - name: Release (tag only)
+        if: startsWith(github.ref, 'refs/tags/') && success()
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SuperMidiMap-macos.zip
