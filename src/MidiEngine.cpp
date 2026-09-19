@@ -18,7 +18,10 @@ MidiEngine::MidiEngine(QObject *parent)
 #endif
     if (m_backend)
         m_backend->setMessageCallback([this](quint32 packed) { onShortMessage(packed); });
-    m_table.store(std::make_shared<const MappingTable>(), std::memory_order_release);
+    {
+        std::unique_lock<std::shared_mutex> lock(m_tableMutex);
+        m_table = std::make_shared<const MappingTable>();
+    }
 }
 
 MidiEngine::~MidiEngine()
@@ -88,7 +91,8 @@ void MidiEngine::applyTable(std::shared_ptr<const MappingTable> table)
     if (!table)
         return;
     flushActiveNotes();  // 旧映射下已按下的音符先补发 Note Off
-    m_table.store(std::move(table), std::memory_order_release);
+    std::unique_lock<std::shared_mutex> lock(m_tableMutex);
+    m_table = std::move(table);
 }
 
 void MidiEngine::panic()
@@ -118,7 +122,11 @@ void MidiEngine::onShortMessage(quint32 packed)
 
     const quint8 type = status & 0xF0;
     const quint8 ch = status & 0x0F;
-    const std::shared_ptr<const MappingTable> table = m_table.load(std::memory_order_acquire);
+    std::shared_ptr<const MappingTable> table;
+    {
+        std::shared_lock<std::shared_mutex> lock(m_tableMutex);
+        table = m_table;   // 共享读，锁内仅复制指针
+    }
 
     if (type == 0x90 || type == 0x80) {
         if (d1 >= 128)

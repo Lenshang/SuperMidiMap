@@ -5,8 +5,10 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <vector>
 
+#include "backends/MidiBackend.h"
 #include "MappingTable.h"
 
 class MidiBackend;
@@ -62,7 +64,11 @@ private:
 
     std::unique_ptr<MidiBackend> m_backend;
     std::atomic<bool> m_running{false};
-    std::atomic<std::shared_ptr<const MappingTable>> m_table;
+
+    // 翻译表：GUI 线程独占写，MIDI 回调线程共享读。
+    // 不用 std::atomic<shared_ptr>——MSVC 支持但 Apple libc++ 未实现。
+    mutable std::shared_mutex m_tableMutex;
+    std::shared_ptr<const MappingTable> m_table;
 
     std::mutex m_activeMutex;
     std::vector<ActiveNote> m_active;
