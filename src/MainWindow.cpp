@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "MidiClip.h"
 #include "MidiEngine.h"
 #include "PadGridWidget.h"
 #include "NoteNames.h"
@@ -24,6 +25,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
+#include <QSpinBox>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QSystemTrayIcon>
@@ -168,18 +170,52 @@ void MainWindow::buildUi()
     padForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     m_padTitleLabel = new QLabel(padGroup);
     padForm->addRow(m_padTitleLabel);
+
+    m_modeBox = new QComboBox(padGroup);
+    m_modeBox->addItem(tr("音符（重映射）"), 0);
+    m_modeBox->addItem(tr("MIDI 片段（按住播放）"), 1);
+    padForm->addRow(tr("模式"), m_modeBox);
+
     m_sourceBox = new QComboBox(padGroup);
     for (int i = 0; i < 128; ++i)
         m_sourceBox->addItem(NoteNames::withNumber(i), i);
     makeNoteComboFilterable(m_sourceBox);
     m_sourceBox->lineEdit()->setPlaceholderText(tr("输入音名或号码，如 C4 / 60"));
     padForm->addRow(tr("源音符（设备发送）"), m_sourceBox);
+
     m_noteBox = new QComboBox(padGroup);
     for (int i = 0; i < 128; ++i)
         m_noteBox->addItem(NoteNames::withNumber(i), i);
     makeNoteComboFilterable(m_noteBox);
     m_noteBox->lineEdit()->setPlaceholderText(tr("输入音名或号码，如 C4 / 60"));
     padForm->addRow(tr("目标音符"), m_noteBox);
+
+    auto *clipRow = new QWidget(padGroup);
+    auto *clipLayout = new QHBoxLayout(clipRow);
+    clipLayout->setContentsMargins(0, 0, 0, 0);
+    clipLayout->setSpacing(6);
+    m_clipPathEdit = new QLineEdit(clipRow);
+    m_clipPathEdit->setReadOnly(true);
+    m_clipPathEdit->setPlaceholderText(tr("未选择 MIDI 文件"));
+    m_browseClipButton = new QPushButton(tr("浏览..."), clipRow);
+    clipLayout->addWidget(m_clipPathEdit, 1);
+    clipLayout->addWidget(m_browseClipButton);
+    padForm->addRow(tr("MIDI 文件"), clipRow);
+
+    auto *clipPlayRow = new QWidget(padGroup);
+    auto *playLayout = new QHBoxLayout(clipPlayRow);
+    playLayout->setContentsMargins(0, 0, 0, 0);
+    playLayout->setSpacing(6);
+    m_bpmBox = new QSpinBox(clipPlayRow);
+    m_bpmBox->setRange(30, 300);
+    m_bpmBox->setValue(120);
+    m_bpmBox->setSuffix(tr(" BPM"));
+    m_loopBox = new QCheckBox(tr("按住期间循环"), clipPlayRow);
+    m_loopBox->setChecked(true);
+    playLayout->addWidget(m_bpmBox, 1);
+    playLayout->addWidget(m_loopBox);
+    padForm->addRow(tr("播放"), clipPlayRow);
+
     m_channelBox = new QComboBox(padGroup);
     m_channelBox->addItem(tr("跟随原通道"), 0);
     for (int c = 1; c <= 16; ++c)
@@ -262,6 +298,15 @@ void MainWindow::buildUi()
     connect(m_outputBox, &QComboBox::currentIndexChanged, this, &MainWindow::onDeviceSelectionChanged);
     connect(m_sourceBox, &QComboBox::currentIndexChanged, this, &MainWindow::onPadEdited);
     connect(m_noteBox, &QComboBox::currentIndexChanged, this, &MainWindow::onPadEdited);
+    connect(m_modeBox, &QComboBox::currentIndexChanged, this, [this] {
+        if (m_updatingUi)
+            return;
+        updatePadEditorEnabled();
+        onPadEdited();
+    });
+    connect(m_browseClipButton, &QPushButton::clicked, this, &MainWindow::onBrowseClip);
+    connect(m_bpmBox, &QSpinBox::valueChanged, this, &MainWindow::onPadEdited);
+    connect(m_loopBox, &QCheckBox::toggled, this, &MainWindow::onPadEdited);
     connect(m_channelBox, &QComboBox::currentIndexChanged, this, &MainWindow::onPadEdited);
     connect(m_muteBox, &QCheckBox::toggled, this, &MainWindow::onPadEdited);
     connect(m_passthroughBox, &QCheckBox::toggled, this, &MainWindow::onPassthroughChanged);
@@ -407,27 +452,42 @@ void MainWindow::onPadSelected(int index)
     fillPadEditor();
 }
 
+void MainWindow::updatePadEditorEnabled()
+{
+    const bool hasPad = m_selectedPad >= 0;
+    const bool clip = hasPad && m_modeBox->currentIndex() == 1;
+    m_sourceBox->setEnabled(hasPad);
+    m_noteBox->setEnabled(hasPad && !clip);
+    m_channelBox->setEnabled(hasPad);
+    m_muteBox->setEnabled(hasPad);
+    m_clipPathEdit->setEnabled(clip);
+    m_browseClipButton->setEnabled(clip);
+    m_bpmBox->setEnabled(clip);
+    m_loopBox->setEnabled(clip);
+}
+
 void MainWindow::fillPadEditor()
 {
     m_updatingUi = true;
     const bool hasPad = m_selectedPad >= 0;
-    m_sourceBox->setEnabled(hasPad);
-    m_noteBox->setEnabled(hasPad);
-    m_channelBox->setEnabled(hasPad);
-    m_muteBox->setEnabled(hasPad);
     if (hasPad) {
         const PadMapping &m = m_profile.pads[m_selectedPad];
         m_padTitleLabel->setText(tr("<b>垫 %1</b>（源音符 %2）")
                                      .arg(m_selectedPad + 1)
                                      .arg(NoteNames::withNumber(m.source)));
+        m_modeBox->setCurrentIndex(m.mode == 1 ? 1 : 0);
         m_sourceBox->setCurrentIndex(m.source);
         m_noteBox->setCurrentIndex(m.target);
         m_channelBox->setCurrentIndex(m.channel);
         m_muteBox->setChecked(m.muted);
+        m_clipPathEdit->setText(m.clipPath);
+        m_bpmBox->setValue(int(qBound(30.0, m.bpm, 300.0)));
+        m_loopBox->setChecked(m.loop);
     } else {
         m_padTitleLabel->setText(tr("点击左侧网格选择打击垫"));
     }
     m_updatingUi = false;
+    updatePadEditorEnabled();
 }
 
 void MainWindow::onPadEdited()
@@ -440,9 +500,34 @@ void MainWindow::onPadEdited()
     m.source = quint8(qBound(0, m_sourceBox->currentIndex(), 127));
     m.target = quint8(qBound(0, m_noteBox->currentIndex(), 127));
     m.channel = quint8(qBound(0, m_channelBox->currentIndex(), 16));
+    m.mode = m_modeBox->currentIndex() == 1 ? quint8(1) : quint8(0);
+    m.loop = m_loopBox->isChecked();
+    m.bpm = m_bpmBox->value();
+    m.clipPath = m_clipPathEdit->text();
     m_grid->setProfileVisuals(m_profile);
     applyProfileToEngine();
     autosaveProfile();
+}
+
+void MainWindow::onBrowseClip()
+{
+    if (m_selectedPad < 0)
+        return;
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("选择 MIDI 文件"), QString(),
+        tr("MIDI 文件 (*.mid *.midi);;所有文件 (*)"));
+    if (path.isEmpty())
+        return;
+    // 选择时立即解析验证，坏文件当场报错
+    QString error;
+    const MidiClip clip = parseMidiFile(path, m_bpmBox->value(), &error);
+    if (!clip.isValid()) {
+        QMessageBox::warning(this, tr("SuperMidiMap"),
+                             tr("无法解析该 MIDI 文件：\n%1").arg(error));
+        return;
+    }
+    m_clipPathEdit->setText(path);
+    onPadEdited();
 }
 
 void MainWindow::onPassthroughChanged()
@@ -635,7 +720,10 @@ void MainWindow::syncProfileToUi()
 
 void MainWindow::applyProfileToEngine()
 {
-    m_engine->applyTable(m_profile.buildTable());
+    QString warning;
+    m_engine->applyTable(m_profile.buildTable(&warning));
+    if (!warning.isEmpty())
+        statusBar()->showMessage(warning, 8000);
 }
 
 // ---- 状态与生命周期 ----

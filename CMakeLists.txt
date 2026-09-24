@@ -23,6 +23,7 @@ set(APP_SOURCES
     src/MainWindow.cpp
     src/PadGridWidget.cpp
     src/MidiEngine.cpp
+    src/MidiClip.cpp
     src/MappingProfile.cpp
 )
 

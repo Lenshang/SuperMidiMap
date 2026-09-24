@@ -5,7 +5,9 @@
 class QCheckBox;
 class QComboBox;
 class QLabel;
+class QLineEdit;
 class QPushButton;
+class QSpinBox;
 class QSystemTrayIcon;
 class QTimer;
 class MidiEngine;
@@ -26,6 +28,7 @@ private slots:
     void onDeviceSelectionChanged();
     void onPadSelected(int index);
     void onPadEdited();
+    void onBrowseClip();
     void onPassthroughChanged();
     void onPanicClicked();
     void onTestOutputClicked();
@@ -44,6 +47,7 @@ private:
     bool feedbackRisk() const;
     void restartEngine();
     void fillPadEditor();
+    void updatePadEditorEnabled();
     void applyProfileToEngine();
     void syncProfileToUi();
     void autosaveProfile();
@@ -72,6 +76,11 @@ private:
     QLabel *m_padTitleLabel = nullptr;
     QComboBox *m_sourceBox = nullptr;
     QComboBox *m_noteBox = nullptr;
+    QComboBox *m_modeBox = nullptr;
+    QLineEdit *m_clipPathEdit = nullptr;
+    QPushButton *m_browseClipButton = nullptr;
+    QSpinBox *m_bpmBox = nullptr;
+    QCheckBox *m_loopBox = nullptr;
     QComboBox *m_channelBox = nullptr;
     QCheckBox *m_muteBox = nullptr;
     QLabel *m_statusLabel = nullptr;

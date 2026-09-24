@@ -27,8 +27,9 @@ public:
 
     std::array<PadMapping, kPads> pads{};  // 与 kDefaultNotes 一一对应
 
-    // 由 16 个垫的配置构建完整的 128 音符翻译表
-    std::shared_ptr<const MappingTable> buildTable() const;
+    // 由 16 个垫的配置构建完整的 128 音符翻译表（含 MIDI 片段）。
+    // 片段文件解析失败时跳过该片段并设置 *warning。
+    std::shared_ptr<const MappingTable> buildTable(QString *warning = nullptr) const;
 
     QJsonObject toJson() const;
     static MappingProfile fromJson(const QJsonObject &obj, bool *ok = nullptr);

@@ -139,10 +139,14 @@ void PadGridWidget::paintEvent(QPaintEvent * /*event*/)
                    QStringLiteral("%1 · %2").arg(NoteNames::name(src)).arg(src));
 
         // 底部中央：当前映射目标
-        p.setPen(muted ? QColor(0xff, 0x7b, 0x72) : QColor(0xd8, 0xdb, 0xe2));
+        const bool isClip = m_profile.pads[i].mode == 1 && !muted;
+        p.setPen(muted ? QColor(0xff, 0x7b, 0x72)
+                       : (isClip ? QColor(0xf2, 0xb2, 0x4c) : QColor(0xd8, 0xdb, 0xe2)));
         p.setFont(tgtFont);
         const QString tgt = muted ? QStringLiteral("静音")
-                                  : NoteNames::name(identity ? src : int(m.target));
+                                  : (isClip
+                                         ? QStringLiteral("\u266A %1").arg(int(m_profile.pads[i].bpm))
+                                         : NoteNames::name(identity ? src : int(m.target)));
         p.drawText(r.adjusted(8, 0, -8, -6), Qt::AlignBottom | Qt::AlignHCenter, tgt);
 
         // 已重映射的垫在左下角画箭头提示

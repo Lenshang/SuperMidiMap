@@ -1,6 +1,8 @@
 #include "MidiEngine.h"
+#include "MidiClip.h"
 #include <QTimer>
 #include <algorithm>
+#include <cmath>
 
 #if defined(Q_OS_WIN)
 #include "backends/WinMidiBackend.h"
@@ -22,11 +24,17 @@ MidiEngine::MidiEngine(QObject *parent)
         std::unique_lock<std::shared_mutex> lock(m_tableMutex);
         m_table = std::make_shared<const MappingTable>();
     }
+    // 片段播放线程：常驻，空闲时 1ms 轮询，开销可忽略
+    m_playbackRun.store(true, std::memory_order_release);
+    m_playbackThread = std::thread([this] { playbackLoop(); });
 }
 
 MidiEngine::~MidiEngine()
 {
     stop();
+    m_playbackRun.store(false, std::memory_order_release);
+    if (m_playbackThread.joinable())
+        m_playbackThread.join();
 }
 
 QStringList MidiEngine::inputDevices()
@@ -81,6 +89,7 @@ void MidiEngine::stop()
         return;
     m_backend->closeInput();
     flushActiveNotes();
+    stopAllClips();
     m_backend->closeOutput();
     if (m_running.exchange(false, std::memory_order_acq_rel))
         emit stateChanged();
@@ -98,6 +107,7 @@ void MidiEngine::applyTable(std::shared_ptr<const MappingTable> table)
 void MidiEngine::panic()
 {
     flushActiveNotes();
+    stopAllClips();
     for (int ch = 0; ch < 16; ++ch) {
         sendShort(quint8(0xB0 | ch), 123, 0);  // All Notes Off
         sendShort(quint8(0xB0 | ch), 120, 0);  // All Sound Off
@@ -133,6 +143,18 @@ void MidiEngine::onShortMessage(quint32 packed)
             return;
         const bool isOn = (type == 0x90 && d2 > 0);
         emit padActivity(d1, d2, isOn);
+
+        // MIDI 片段垫：按住开始播放，松开停止；触发音符本身不转发
+        if (isOn && table->clipFor[d1] >= 0) {
+            startClip(d1);
+            return;
+        }
+        if (!isOn) {
+            if (stopClip(d1))
+                return;                       // 有播放实例被停止（已补发 Note Off）
+            if (table->notes[d1].mode == 1)
+                return;                       // 片段垫但无实例（如刚重连）：吞掉
+        }
 
         if (isOn) {
             const PadMapping &m = table->notes[d1];
@@ -211,4 +233,142 @@ void MidiEngine::flushActiveNotes()
     }
     for (const ActiveNote &n : snapshot)
         sendShort(quint8(0x80 | n.outChannel), n.outNote, 0);
+}
+
+// ---- MIDI 片段播放 ----
+
+void MidiEngine::startClip(quint8 sourceNote)
+{
+    std::shared_ptr<const MappingTable> table;
+    {
+        std::shared_lock<std::shared_mutex> lock(m_tableMutex);
+        table = m_table;
+    }
+    if (!table)
+        return;
+    const qint8 idx = table->clipFor[sourceNote];
+    if (idx < 0 || idx >= int(table->clips.size()))
+        return;
+    const auto &clip = table->clips[idx];
+    if (!clip || !clip->isValid())
+        return;
+
+    ClipInstance inst;
+    inst.table = table;
+    inst.clipIndex = idx;
+    inst.baseChannel = table->notes[sourceNote].channel;
+    inst.loop = table->notes[sourceNote].loop;
+    inst.startTime = std::chrono::steady_clock::now();
+
+    std::lock_guard<std::mutex> lock(m_clipsMutex);
+    m_clips[sourceNote] = std::move(inst);  // 若已在播放则从头开始
+}
+
+bool MidiEngine::stopClip(quint8 sourceNote)
+{
+    std::vector<std::pair<quint8, quint8>> offs;
+    {
+        std::lock_guard<std::mutex> lock(m_clipsMutex);
+        const auto it = m_clips.find(sourceNote);
+        if (it == m_clips.end())
+            return false;
+        offs.swap(it->second.sounding);
+        m_clips.erase(it);
+    }
+    for (const auto &n : offs)  // 补发 Note Off，防止卡音
+        sendShort(quint8(0x80 | n.first), n.second, 0);
+    return true;
+}
+
+void MidiEngine::stopAllClips()
+{
+    std::vector<std::pair<quint8, quint8>> offs;
+    {
+        std::lock_guard<std::mutex> lock(m_clipsMutex);
+        for (auto &kv : m_clips) {
+            for (const auto &n : kv.second.sounding)
+                offs.push_back(n);
+            kv.second.sounding.clear();
+        }
+        m_clips.clear();
+    }
+    for (const auto &n : offs)
+        sendShort(quint8(0x80 | n.first), n.second, 0);
+}
+
+void MidiEngine::playbackLoop()
+{
+#ifdef Q_OS_WIN
+    timeBeginPeriod(1);   // 保证 1ms 休眠粒度
+#endif
+    while (m_playbackRun.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+        std::vector<std::pair<quint8, quint8>> autoStopOffs;
+        std::vector<quint8> autoStopKeys;
+        {
+            std::lock_guard<std::mutex> lock(m_clipsMutex);
+            if (m_clips.empty())
+                continue;
+            const auto now = std::chrono::steady_clock::now();
+
+            for (auto &kv : m_clips) {
+                ClipInstance &inst = kv.second;
+                const auto &clip = inst.table->clips[inst.clipIndex];
+                if (!clip || clip->lengthMs <= 0 || clip->events.isEmpty())
+                    continue;
+
+                const double elapsedMs = std::chrono::duration<double, std::milli>(
+                                             now - inst.startTime).count();
+                double pos = elapsedMs;
+                if (inst.loop)
+                    pos = std::fmod(elapsedMs, clip->lengthMs);
+
+                auto emitRange = [&](double from, double to) {
+                    while (inst.eventPos < size_t(clip->events.size())) {
+                        const ClipEvent &ev = clip->events.at(int(inst.eventPos));
+                        if (ev.timeMs >= to)
+                            break;
+                        if (ev.timeMs >= from) {
+                            const quint8 evCh = ev.status & 0x0F;
+                            const quint8 ch = inst.baseChannel ? quint8(inst.baseChannel - 1) : evCh;
+                            const quint8 st = quint8((ev.status & 0xF0) | ch);
+                            sendShort(st, ev.note, ev.vel);
+                            if ((st & 0xF0) == 0x90 && ev.vel > 0)
+                                inst.sounding.push_back({ch, ev.note});
+                            else if ((st & 0xF0) == 0x80)
+                                inst.sounding.erase(
+                                    std::remove(inst.sounding.begin(), inst.sounding.end(),
+                                                std::make_pair(ch, ev.note)),
+                                    inst.sounding.end());
+                        }
+                        ++inst.eventPos;
+                    }
+                };
+
+                if (pos < inst.lastPosMs) {   // 循环回绕：先播完尾部再从头
+                    emitRange(inst.lastPosMs, clip->lengthMs + 1.0);
+                    inst.eventPos = 0;
+                    emitRange(0.0, pos + 1.0);
+                } else {
+                    emitRange(inst.lastPosMs, pos + 1.0);
+                }
+                inst.lastPosMs = pos;
+
+                if (!inst.loop && elapsedMs >= clip->lengthMs) {  // 非循环播放完毕
+                    autoStopOffs.insert(autoStopOffs.end(),
+                                        inst.sounding.begin(), inst.sounding.end());
+                    inst.sounding.clear();
+                    autoStopKeys.push_back(kv.first);
+                }
+            }
+            for (const quint8 key : autoStopKeys)
+                m_clips.erase(key);
+        }
+        for (const auto &n : autoStopOffs)
+            sendShort(quint8(0x80 | n.first), n.second, 0);
+    }
+#ifdef Q_OS_WIN
+    timeEndPeriod(1);
+#endif
 }

@@ -3,9 +3,13 @@
 #include <QString>
 #include <QStringList>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
+#include <thread>
 #include <vector>
 
 #include "backends/MidiBackend.h"
@@ -56,11 +60,28 @@ private:
         quint8 outNote;     // 按下时实际发出的音符号
     };
 
+    // 一个正在播放的 MIDI 片段实例
+    struct ClipInstance
+    {
+        std::shared_ptr<const MappingTable> table;  // 开始播放时的表快照
+        int clipIndex = 0;
+        quint8 baseChannel = 0;   // PadMapping.channel（0 = 用文件内通道）
+        bool loop = true;
+        std::chrono::steady_clock::time_point startTime;
+        double lastPosMs = 0.0;
+        size_t eventPos = 0;      // 当前圈内的事件扫描位置
+        std::vector<std::pair<quint8, quint8>> sounding;  // 正在发声的 (通道, 音符)
+    };
+
     void onShortMessage(quint32 packed);
     void sendShort(quint8 status, quint8 d1, quint8 d2);
     void countDropped() { m_dropped.fetch_add(1, std::memory_order_relaxed); }
     void eraseActiveLocked(quint8 channel, quint8 srcNote);
     void flushActiveNotes();
+    void startClip(quint8 sourceNote);
+    bool stopClip(quint8 sourceNote);   // 返回是否确实有实例被停止
+    void stopAllClips();
+    void playbackLoop();
 
     std::unique_ptr<MidiBackend> m_backend;
     std::atomic<bool> m_running{false};
@@ -72,6 +93,12 @@ private:
 
     std::mutex m_activeMutex;
     std::vector<ActiveNote> m_active;
+
+    // MIDI 片段播放（独立线程，1ms 时间片推进）
+    std::mutex m_clipsMutex;
+    std::map<quint8, ClipInstance> m_clips;
+    std::thread m_playbackThread;
+    std::atomic<bool> m_playbackRun{false};
 
     std::atomic<quint64> m_forwarded{0};
     std::atomic<quint64> m_dropped{0};

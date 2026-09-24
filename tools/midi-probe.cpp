@@ -5,6 +5,7 @@
 //   midi-probe mon <输入设备名|序号>                        监视某输入设备的所有消息
 //   midi-probe send <输出设备名|序号> <note> [vel] [ch] [count] [intervalMs]
 //                                                          发送 Note On/Off
+//   midi-probe hold <输出设备名|序号> <note> [ms] [vel] [ch]   按住发送（长 Note On）
 //   midi-probe latency <输出设备|序号> <输入设备|序号> [note] [count]
 //                                                          测量 发送->接收 单程延迟
 //
@@ -205,6 +206,7 @@ static void usage()
            "  midi-probe list\n"
            "  midi-probe mon <输入设备名|序号>\n"
            "  midi-probe send <输出设备名|序号> <note> [vel] [ch] [count] [intervalMs]\n"
+           "  midi-probe hold <输出设备名|序号> <note> [ms] [vel] [ch]\n"
            "  midi-probe latency <输出设备|序号> <输入设备|序号> [note] [count]\n");
 }
 
@@ -286,6 +288,37 @@ int main(int argc, char **argv)
             if (i + 1 < count)
                 Sleep(gapMs);
         }
+        midiOutClose(out);
+        return 0;
+    }
+
+    if (cmd == "hold") {
+        if (argc < 4) {
+            printf("用法: midi-probe hold <输出设备|序号> <note> [ms] [vel] [ch]\n");
+            return 1;
+        }
+        const int id = resolveDevice(argv[2], false);
+        if (id < 0) {
+            printf("未找到输出设备: %s\n", argv[2]);
+            return 1;
+        }
+        const int note = atoi(argv[3]);
+        const int holdMs = argc > 4 ? atoi(argv[4]) : 1000;
+        const int vel = argc > 5 ? atoi(argv[5]) : 100;
+        const int ch = argc > 6 ? atoi(argv[6]) : 1;
+
+        HMIDIOUT out = nullptr;
+        if (midiOutOpen(&out, UINT(id), 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
+            printf("打开输出设备失败\n");
+            return 1;
+        }
+        printf("向 [%d] 发送 Note On note=%d vel=%d ch=%d，按住 %d ms...\n",
+               id, note, vel, ch, holdMs);
+        fflush(stdout);
+        midiOutShortMsg(out, DWORD(0x90 | (ch - 1)) | (DWORD(note) << 8) | (DWORD(vel) << 16));
+        Sleep(holdMs);
+        midiOutShortMsg(out, DWORD(0x80 | (ch - 1)) | (DWORD(note) << 8));
+        printf("已释放 (Note Off)\n");
         midiOutClose(out);
         return 0;
     }
