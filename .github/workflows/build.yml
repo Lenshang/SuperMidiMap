@@ -55,6 +55,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: SuperMidiMap-windows-x64.zip
+          generate_release_notes: true
 
   macos:
     name: macOS (CoreMIDI, experimental)
@@ -94,3 +95,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: SuperMidiMap-macos.zip
+          generate_release_notes: true

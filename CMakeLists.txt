@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(SuperMidiMap VERSION 0.3.0 LANGUAGES CXX)
+project(SuperMidiMap VERSION 0.4.0 LANGUAGES CXX)
 
 if (WIN32)
     enable_language(RC)
@@ -14,7 +14,7 @@ if (MSVC)
     add_compile_options(/utf-8)
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 
 qt_standard_project_setup()
 
@@ -42,7 +42,7 @@ endif()
 
 add_executable(SuperMidiMap WIN32 MACOSX_BUNDLE ${APP_SOURCES})
 
-target_link_libraries(SuperMidiMap PRIVATE Qt6::Widgets)
+target_link_libraries(SuperMidiMap PRIVATE Qt6::Widgets Qt6::Network)
 
 if (WIN32)
     target_compile_definitions(SuperMidiMap PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)

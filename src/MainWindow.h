@@ -19,6 +19,9 @@ class MainWindow : public QMainWindow
 public:
     explicit MainWindow(QWidget *parent = nullptr);
 
+    // 从托盘/最小化状态还原窗口并前置（二次启动的实例会请求调用）
+    void bringToFront();
+
 protected:
     void closeEvent(QCloseEvent *event) override;
     void changeEvent(QEvent *event) override;

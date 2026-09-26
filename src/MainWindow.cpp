@@ -121,6 +121,14 @@ MainWindow::MainWindow(QWidget *parent)
     refreshDevices(true);
 }
 
+void MainWindow::bringToFront()
+{
+    setWindowState(windowState() & ~Qt::WindowMinimized);
+    show();
+    raise();
+    activateWindow();
+}
+
 void MainWindow::buildUi()
 {
     // ---- 菜单 ----
@@ -281,12 +289,8 @@ void MainWindow::buildUi()
         connect(m_tray, &QSystemTrayIcon::activated, this,
                 [this](QSystemTrayIcon::ActivationReason reason) {
                     if (reason == QSystemTrayIcon::Trigger
-                        || reason == QSystemTrayIcon::DoubleClick) {
-                        setWindowState(windowState() & ~Qt::WindowMinimized);
-                        show();
-                        raise();
-                        activateWindow();
-                    }
+                        || reason == QSystemTrayIcon::DoubleClick)
+                        bringToFront();
                 });
     }
 
