@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(SuperMidiMap VERSION 0.4.0 LANGUAGES CXX)
+project(SuperMidiMap VERSION 0.4.1 LANGUAGES CXX)
 
 if (WIN32)
     enable_language(RC)
