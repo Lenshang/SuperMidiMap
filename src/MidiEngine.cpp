@@ -149,6 +149,8 @@ void MidiEngine::onShortMessage(quint32 packed)
             startClip(d1);
             return;
         }
+        if (isOn && table->notes[d1].mode == 1)
+            return;                       // 片段垫但文件不可用：与松开路径同样吞掉，防卡音
         if (!isOn) {
             if (stopClip(d1))
                 return;                       // 有播放实例被停止（已补发 Note Off）

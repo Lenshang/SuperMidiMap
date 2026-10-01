@@ -34,5 +34,9 @@ public:
 
     // 片段支持：clips 为本表引用的片段集合，clipFor[音符] 为下标（-1 = 非片段垫）
     std::vector<std::shared_ptr<const MidiClip>> clips;
-    std::array<qint8, 128> clipFor{};
+    std::array<qint8, 128> clipFor = [] {
+        std::array<qint8, 128> a{};
+        a.fill(-1);
+        return a;
+    }();
 };
